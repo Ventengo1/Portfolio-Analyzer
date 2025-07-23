@@ -1,10 +1,13 @@
+
 import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns # For correlation heatmap
 from datetime import datetime, timedelta
 import warnings
-from google.colab import files
+
+# Added: Dividends, volatility, max drawdown, stock correlation matrix with visualization - took like 4 hours and a lot of troubleshooting but I got it done
 
 warnings.filterwarnings("ignore")
 
@@ -24,6 +27,7 @@ if data_input_choice == '1':
     print("CSV must contain columns: 'Ticker', 'Shares', 'Purchase_Date', 'Purchase_Price'.")
     print("Date format: YYYY-MM-DD.")
 
+    from google.colab import files # Import here as it's Colab-specific and might not be used if manual input is chosen
     uploaded_files = files.upload()
 
     if not uploaded_files:
@@ -172,7 +176,6 @@ portfolio_data['annualized_return_percent'] = np.where(
     portfolio_data['percentage_gain_loss']
 )
 
-# New Feature 1: Dividend Tracking
 print("\n--- Dividend Income Calculation ---")
 portfolio_data['total_dividends_received'] = 0.0
 for ticker in portfolio_data.index:
@@ -180,7 +183,6 @@ for ticker in portfolio_data.index:
         stock_info = yf.Ticker(ticker)
         dividends = stock_info.dividends
         if not dividends.empty:
-            # Filter dividends only from after purchase date
             relevant_dividends = dividends[(dividends.index >= portfolio_data.loc[ticker, 'purchase_date']) & (dividends.index <= current_datetime)]
             total_div_per_share = relevant_dividends.sum()
             portfolio_data.loc[ticker, 'total_dividends_received'] = total_div_per_share * portfolio_data.loc[ticker, 'shares']
@@ -239,10 +241,58 @@ elif total_initial_portfolio_investment > 0:
     overall_portfolio_annualized_return_incl_div = overall_portfolio_percentage_change_incl_div
 
 
-# New Feature 2: Portfolio Volatility
+full_date_range = pd.date_range(start=min_purchase_date, end=current_datetime)
+daily_portfolio_value_history = pd.DataFrame(index=full_date_range)
+daily_portfolio_value_history['Portfolio Value'] = 0.0
+
+for ticker_sym in portfolio_data.index:
+    num_shares_held = portfolio_data.loc[ticker_sym, 'shares']
+    purchase_date_for_stock = portfolio_data.loc[ticker_sym, 'purchase_date']
+
+    stock_historical_prices = historical_market_data[ticker_sym].loc[historical_market_data.index >= purchase_date_for_stock]
+
+    stock_daily_valuation = stock_historical_prices * num_shares_held
+
+    daily_portfolio_value_history['Portfolio Value'] = daily_portfolio_value_history['Portfolio Value'].add(stock_daily_valuation, fill_value=0)
+
+daily_portfolio_value_history = daily_portfolio_value_history[daily_portfolio_value_history['Portfolio Value'] > 0]
+
+
+# Feature: Maximum Drawdown Calculation
+print("\n--- Maximum Drawdown Calculation ---")
+if not daily_portfolio_value_history.empty:
+    rolling_max = daily_portfolio_value_history['Portfolio Value'].expanding(min_periods=1).max()
+    drawdown = (daily_portfolio_value_history['Portfolio Value'] / rolling_max - 1) * 100
+    max_drawdown = drawdown.min()
+    print(f"Maximum Portfolio Drawdown: {max_drawdown:,.2f}%")
+else:
+    print("Cannot calculate maximum drawdown: insufficient portfolio value history.")
+
+
+# Feature: Stock Correlation Matrix
+print("\n--- Stock Correlation Matrix ---")
+if len(all_tickers) > 1 and not historical_market_data.empty:
+    daily_returns = historical_market_data[all_tickers].pct_change().dropna()
+    correlation_matrix = daily_returns.corr()
+    print("\nDaily Returns Correlation Matrix:")
+    print(correlation_matrix.to_string(float_format="%.2f"))
+
+    plt.figure(figsize=(len(all_tickers)*0.8, len(all_tickers)*0.7))
+    sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f", linewidths=.5)
+    plt.title('Stock Daily Returns Correlation Heatmap', fontsize=16)
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+    plt.show()
+else:
+    print("Cannot generate correlation matrix: less than two stocks or no historical data.")
+
+
+# New Feature from previous update for volatility
 print("\n--- Portfolio Volatility Calculation ---")
 daily_portfolio_returns = daily_portfolio_value_history['Portfolio Value'].pct_change().dropna()
 annualized_portfolio_volatility = daily_portfolio_returns.std() * np.sqrt(252) * 100 # Annualized percentage volatility
+
 
 print("\n--- Overall Portfolio Summary ---")
 print(f"Total Initial Investment: ${total_initial_portfolio_investment:,.2f}")
@@ -252,10 +302,12 @@ print(f"Current Total Portfolio Value (Market + Dividends): ${portfolio_data['cu
 print(f"Overall Dollar Gain/Loss (Market Only): ${overall_portfolio_dollar_change:,.2f}")
 print(f"Overall Percentage Gain/Loss (Market Only): {overall_portfolio_percentage_change:,.2f}%")
 print(f"Overall Dollar Gain/Loss (Including Dividends): ${overall_portfolio_dollar_change_incl_div:,.2f}")
-print(f"Overall Percentage Gain/Loss (Including Dividends): {overall_portfolio_percentage_change_incl_div:,.2f}%")
+print(f"Overall Percentage Gain/Loss (Including Dividends): {overall_portfolio_percentage_gain_loss_incl_div:,.2f}%")
 print(f"Overall Annualized Return (CAGR, Market Only): {overall_portfolio_annualized_return:,.2f}%")
 print(f"Overall Annualized Return (CAGR, Including Dividends): {overall_portfolio_annualized_return_incl_div:,.2f}%")
 print(f"Annualized Portfolio Volatility (Risk): {annualized_portfolio_volatility:,.2f}%")
+if 'max_drawdown' in locals(): # Only print if calculated
+    print(f"Maximum Historical Drawdown: {max_drawdown:,.2f}%")
 print("---------------------------------")
 
 
@@ -274,7 +326,7 @@ plt.axis('equal')
 plt.show()
 
 plt.figure(figsize=(12, 6))
-sorted_by_gain_loss = portfolio_data.sort_values('percentage_gain_loss_incl_div', ascending=True) # Use div-inclusive for chart
+sorted_by_gain_loss = portfolio_data.sort_values('percentage_gain_loss_incl_div', ascending=True)
 bar_colors = ['lightcoral' if x < 0 else 'lightgreen' for x in sorted_by_gain_loss['percentage_gain_loss_incl_div']]
 plt.bar(sorted_by_gain_loss.index, sorted_by_gain_loss['percentage_gain_loss_incl_div'], color=bar_colors)
 plt.axhline(0, color='grey', linewidth=0.8)
@@ -288,21 +340,16 @@ plt.show()
 
 print("\nGenerating historical portfolio value chart.")
 
-full_date_range = pd.date_range(start=min_purchase_date, end=current_datetime)
-daily_portfolio_value_history = pd.DataFrame(index=full_date_range)
-daily_portfolio_value_history['Portfolio Value'] = 0.0
 
-for ticker_sym in portfolio_data.index:
-    num_shares_held = portfolio_data.loc[ticker_sym, 'shares']
-    purchase_date_for_stock = portfolio_data.loc[ticker_sym, 'purchase_date']
-
-    stock_historical_prices = historical_market_data[ticker_sym].loc[historical_market_data.index >= purchase_date_for_stock]
-
-    stock_daily_valuation = stock_historical_prices * num_shares_held
-
-    daily_portfolio_value_history['Portfolio Value'] = daily_portfolio_value_history['Portfolio Value'].add(stock_daily_valuation, fill_value=0)
-
-daily_portfolio_value_history = daily_portfolio_value_history[daily_portfolio_value_history['Portfolio Value'] > 0]
+plt.figure(figsize=(14, 7))
+plt.plot(daily_portfolio_value_history.index, daily_portfolio_value_history['Portfolio Value'], label='Your Portfolio Value', color='blue', linewidth=2)
+plt.xlabel('Date', fontsize=12)
+plt.ylabel('Value ($)', fontsize=12)
+plt.title('Historical Portfolio Value', fontsize=16)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+plt.tight_layout()
+plt.show()
 
 
 print("\n--- Benchmark Comparison ---")
@@ -341,7 +388,7 @@ if not benchmark_historical_data.empty and not daily_portfolio_value_history.emp
     print("\n--- Benchmark Performance Summary ---")
     print(f"Benchmark ({benchmark_ticker_symbol}) Overall Return: {benchmark_overall_return_percent:,.2f}%")
     print(f"Your Portfolio Overall Return (Market Only): {overall_portfolio_percentage_change:,.2f}%")
-    print(f"Your Portfolio Overall Return (Incl. Dividends): {overall_portfolio_percentage_change_incl_div:,.2f}%")
+    print(f"Your Portfolio Overall Return (Including Dividends): {overall_portfolio_percentage_change_incl_div:,.2f}%")
     if overall_portfolio_percentage_change_incl_div > benchmark_overall_return_percent:
         print("Portfolio performance exceeded benchmark (including dividends).")
     else:
