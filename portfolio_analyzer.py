@@ -4,135 +4,180 @@ import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime, timedelta
 import warnings
+from google.colab import files
 
 warnings.filterwarnings("ignore")
 
-# --- Portfolio setup ---
-portfolio = {
-    'AAPL': {'shares': 10, 'purchase_date': '2023-01-15', 'purchase_price': 135.95},
-    'MSFT': {'shares': 5, 'purchase_date': '2022-06-20', 'purchase_price': 252.99},
-    'GOOGL': {'shares': 3, 'purchase_date': '2024-03-10', 'purchase_price': 136.65},
-    'AMZN': {'shares': 7, 'purchase_date': '2023-09-01', 'purchase_price': 138.16},
-    'TSLA': {'shares': 2, 'purchase_date': '2023-04-25', 'purchase_price': 162.99},
-    'JPM': {'shares': 8, 'purchase_date': '2024-01-05', 'purchase_price': 169.87},
-    'VUG': {'shares': 4, 'purchase_date': '2022-11-01', 'purchase_price': 250.70},
-    'VOO': {'shares': 6, 'purchase_date': '2023-07-20', 'purchase_price': 400.05},
-}
 
-df = pd.DataFrame.from_dict(portfolio, orient='index')
-df.index.name = 'Ticker'
-df['purchase_date'] = pd.to_datetime(df['purchase_date'])
+choice = input("Enter 1 to upload a CSV or 2 for manual entry: ").strip()
 
-# --- Download historical price data ---
-tickers = df.index.tolist()
-start_date = df['purchase_date'].min() - timedelta(days=60)
-end_date = datetime.now()
+portfolio = pd.DataFrame()
 
-try:
-    data = yf.download(tickers, start=start_date, end=end_date)
-    if 'Adj Close' in data.columns:
-        price_data = data['Adj Close']
-    else:
-        price_data = data['Close'] # Fallback to Close if Adj Close is not available
-except Exception as e:
-    print(f"Data download failed: {e}")
-    price_data = pd.DataFrame() # Assign empty DataFrame to avoid NameError
+if choice == '1':
+    print("Upload your CSV with columns: Ticker, Shares, Purchase_Date, Purchase_Price")
+    uploaded = files.upload()
+    if not uploaded:
+        print("No file uploaded.")
+        exit()
+    file = next(iter(uploaded))
+    try:
+        df = pd.read_csv(file)
+        df.columns = df.columns.str.strip()
+        df.rename(columns={
+            'Ticker': 'ticker',
+            'Shares': 'shares',
+            'Purchase_Date': 'purchase_date',
+            'Purchase_Price': 'purchase_price'
+        }, inplace=True)
+        df['purchase_date'] = pd.to_datetime(df['purchase_date'])
+        df.set_index('ticker', inplace=True)
+        if not all(col in df.columns for col in ['shares', 'purchase_date', 'purchase_price']):
+            raise ValueError("Missing columns.")
+        portfolio = df
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        exit()
 
-# --- Get current prices ---
-if not price_data.empty:
-    current_prices = price_data.iloc[-1]
-    df['current_price'] = df.index.map(current_prices)
+elif choice == '2':
+    data = []
+    while True:
+        ticker = input("Ticker: ").strip().upper()
+        if not ticker:
+            continue
+        try:
+            shares = float(input("Shares: "))
+            date = datetime.strptime(input("Purchase date (YYYY-MM-DD): "), '%Y-%m-%d')
+            price = float(input("Purchase price: "))
+        except:
+            print("Invalid input.")
+            continue
+        data.append({'ticker': ticker, 'shares': shares, 'purchase_date': date, 'purchase_price': price})
+        if input("Add another? (y/n): ").lower() != 'y':
+            break
+    if not data:
+        print("No data entered.")
+        exit()
+    portfolio = pd.DataFrame(data).set_index('ticker')
+
 else:
-    print("Could not download price data. Using purchase prices for current value.")
-    df['current_price'] = df['purchase_price']
+    print("Invalid selection.")
+    exit()
+
+print("\nPortfolio:")
+print(portfolio)
+
+tickers = portfolio.index.tolist()
+start = portfolio['purchase_date'].min() - timedelta(days=60)
+end = datetime.now()
+
+hist = None
+try:
+    hist = yf.download(tickers, start=start, end=end)['Adj Close']
+except Exception as e:
+    print(f"Download error: {e}")
 
 
-# Fill any missing prices with purchase price
-if df['current_price'].isnull().any():
-    df['current_price'].fillna(df['purchase_price'], inplace=True)
+latest_prices = pd.Series(dtype=float)
+if hist is not None:
+    latest_prices = hist.iloc[-1]
 
-# --- Performance calculations ---
-df['initial_investment'] = df['shares'] * df['purchase_price']
-df['market_value'] = df['shares'] * df['current_price']
-df['gain_loss'] = df['market_value'] - df['initial_investment']
-df['pct_gain_loss'] = (df['gain_loss'] / df['initial_investment']) * 100
+portfolio['current_price'] = portfolio.index.map(latest_prices)
 
-df['years_held'] = (end_date - df['purchase_date']).dt.days / 365.25
-df['annualized_return'] = np.where(
-    df['years_held'] > 0,
-    ((1 + (df['pct_gain_loss'] / 100))**(1 / df['years_held']) - 1) * 100,
-    df['pct_gain_loss']
+if portfolio['current_price'].isnull().any():
+    portfolio['current_price'].fillna(portfolio['purchase_price'], inplace=True)
+
+
+portfolio['initial_value'] = portfolio['shares'] * portfolio['purchase_price']
+portfolio['current_value'] = portfolio['shares'] * portfolio['current_price']
+portfolio['change'] = portfolio['current_value'] - portfolio['initial_value']
+portfolio['change_pct'] = (portfolio['change'] / portfolio['initial_value']) * 100
+portfolio['years'] = (end - portfolio['purchase_date']).dt.days / 365.25
+portfolio['cagr'] = np.where(
+    portfolio['years'] > 0,
+    ((1 + portfolio['change_pct'] / 100) ** (1 / portfolio['years']) - 1) * 100,
+    portfolio['change_pct']
 )
 
-# --- Portfolio summary ---
-total_initial = df['initial_investment'].sum()
-total_current = df['market_value'].sum()
-total_gain = total_current - total_initial
-total_pct_gain = (total_gain / total_initial) * 100 if total_initial != 0 else 0
 
-portfolio_lifetime = (end_date - df['purchase_date'].min()).days / 365.25
-if portfolio_lifetime > 0 and total_initial > 0:
-    overall_cagr = ((total_current / total_initial)**(1 / portfolio_lifetime) - 1) * 100
-else:
-    overall_cagr = total_pct_gain
+pd.set_option('display.float_format', lambda x: f'{x:.2f}')
+print("\nPerformance:")
+print(portfolio[[
+    'shares', 'purchase_price', 'initial_value',
+    'current_price', 'current_value', 'change',
+    'change_pct', 'years', 'cagr'
+]])
+pd.reset_option('display.float_format')
 
-# --- Display results ---
-print("\n--- Portfolio Performance ---")
-print(df[['shares', 'purchase_price', 'initial_investment', 'current_price',
-          'market_value', 'gain_loss', 'pct_gain_loss', 'years_held', 'annualized_return']])
-print("\n--- Summary ---")
-print(f"Initial Investment: ${total_initial:,.2f}")
-print(f"Current Value: ${total_current:,.2f}")
-print(f"Total Gain/Loss: ${total_gain:,.2f}")
-print(f"Overall % Gain: {total_pct_gain:.2f}%")
-print(f"Overall Annualized Return: {overall_cagr:.2f}%")
 
-# --- Visualizations ---
-plt.figure(figsize=(10, 7))
-plt.pie(df['market_value'],
-        labels=df.index,
-        autopct='%1.1f%%',
-        startangle=90,
-        pctdistance=0.85,
-        wedgeprops=dict(width=0.4))
-plt.title('Portfolio Allocation by Value')
+total_invested = portfolio['initial_value'].sum()
+total_now = portfolio['current_value'].sum()
+total_change = total_now - total_invested
+total_pct = (total_change / total_invested) * 100
+years_held = (end - portfolio['purchase_date'].min()).days / 365.25
+cagr = ((total_now / total_invested) ** (1 / years_held) - 1) * 100 if years_held > 0 else total_pct
+
+print("\nSummary:")
+print(f"Initial: ${total_invested:,.2f}")
+print(f"Current: ${total_now:,.2f}")
+print(f"Change: ${total_change:,.2f} ({total_pct:.2f}%)")
+print(f"CAGR: {cagr:.2f}%")
+
+
+plt.figure(figsize=(10, 6))
+plt.pie(portfolio['current_value'], labels=portfolio.index, autopct='%1.1f%%', startangle=90, pctdistance=0.85, wedgeprops=dict(width=0.4))
+plt.title('Portfolio Allocation')
 plt.axis('equal')
 plt.show()
 
 plt.figure(figsize=(12, 6))
-sorted_df = df.sort_values('pct_gain_loss')
-colors = ['red' if x < 0 else 'green' for x in sorted_df['pct_gain_loss']]
-plt.bar(sorted_df.index, sorted_df['pct_gain_loss'], color=colors)
-plt.axhline(0, color='grey', linewidth=0.8)
-plt.title('Percentage Gain/Loss by Stock')
-plt.ylabel('% Gain/Loss')
-plt.grid(axis='y', linestyle='--', alpha=0.6)
+sorted_perf = portfolio.sort_values('change_pct')
+colors = ['red' if x < 0 else 'green' for x in sorted_perf['change_pct']]
+plt.bar(sorted_perf.index, sorted_perf['change_pct'], color=colors)
+plt.axhline(0, color='gray', linestyle='--')
+plt.xticks(rotation=45)
+plt.title('Performance by Stock (%)')
 plt.tight_layout()
 plt.show()
 
-# --- Historical Portfolio Value ---
-if not price_data.empty:
-    date_range = pd.date_range(start=df['purchase_date'].min(), end=end_date)
-    portfolio_value = pd.DataFrame(index=date_range)
-    portfolio_value['Total Value'] = 0.0
 
-    for ticker in df.index:
-        shares = df.loc[ticker, 'shares']
-        purchase_date = df.loc[ticker, 'purchase_date']
-        ticker_prices = price_data[ticker].loc[price_data.index >= purchase_date]
-        daily_value = ticker_prices * shares
-        portfolio_value['Total Value'] = portfolio_value['Total Value'].add(daily_value, fill_value=0)
+date_range = pd.date_range(start=portfolio['purchase_date'].min(), end=end)
+daily = pd.DataFrame(index=date_range)
+daily['value'] = 0.0
 
-    portfolio_value = portfolio_value[portfolio_value['Total Value'] > 0]
+if hist is not None:
+    for t in portfolio.index:
+        shares = portfolio.loc[t, 'shares']
+        purchase_date = portfolio.loc[t, 'purchase_date']
+        try:
+            price_series = hist[t].loc[hist.index >= purchase_date]
+            daily_value = price_series * shares
+            daily['value'] += daily_value.reindex(daily.index, fill_value=0)
+        except:
+            continue
 
-    if not portfolio_value.empty:
-        plt.figure(figsize=(14, 7))
-        plt.plot(portfolio_value.index, portfolio_value['Total Value'], label='Portfolio Value', color='blue')
-        plt.title('Portfolio Value Over Time')
-        plt.xlabel('Date')
-        plt.ylabel('Value ($)')
-        plt.grid(True, linestyle='--', alpha=0.6)
+
+benchmark = 'VOO'
+try:
+    benchmark_data = yf.download(benchmark, start=start, end=end)['Adj Close']
+    if not daily.empty and daily.iloc[0]['value'] != 0:
+        base_value = daily.iloc[0]['value']
+        benchmark_scaled = (benchmark_data / benchmark_data.loc[daily.index[0]]) * base_value
+        benchmark_scaled = benchmark_scaled.reindex(daily.index, method='ffill')
+
+        plt.figure(figsize=(14, 6))
+        plt.plot(daily.index, daily['value'], label='Portfolio', linewidth=2)
+        plt.plot(benchmark_scaled.index, benchmark_scaled, label=benchmark, linestyle='--', linewidth=2)
+        plt.title('Portfolio vs Benchmark')
+        plt.legend()
         plt.tight_layout()
         plt.show()
-else:
-    print("Cannot generate Portfolio Value Over Time chart due to missing price data.")
+
+        b_start = benchmark_data.loc[daily.index[0]]
+        b_end = benchmark_data.iloc[-1]
+        b_pct = ((b_end / b_start) - 1) * 100
+        print(f"\nBenchmark ({benchmark}) Return: {b_pct:.2f}%")
+        print(f"Portfolio Return: {total_pct:.2f}%")
+    else:
+        print("Cannot plot benchmark comparison: Portfolio value is zero or historical data is missing.")
+except Exception as e:
+    print(f"Benchmark data unavailable: {e}")
