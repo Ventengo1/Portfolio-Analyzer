@@ -1,3 +1,14 @@
+# /// script
+# dependencies = [
+#   "yfinance",
+#   "pandas",
+#   "numpy",
+#   "seaborn",
+#   "matplotlib",
+#   "google-colab", # Note: This dependency is for Colab-specific file uploads. Remove or comment out for local execution.
+# ]
+# python = "3.9" # Recommended Python version. You can change this as needed.
+# ///
 import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
@@ -24,45 +35,46 @@ portfolio_data = pd.DataFrame()
 
 
 if your_choice_of_input == '1':
-
     print("\nMarvelous choice! Let's get that CSV file uploaded.")
     print("Just a friendly reminder: Your CSV needs these exact column names: 'Ticker', 'Shares', 'Purchase_Date', 'Purchase_Price'.")
     print("And dates should look like this: YYYY-MM-DD. Got it?")
 
+    try:
+        from google.colab import files
+        the_file_you_gave_me = files.upload()
 
-    from google.colab import files
-    the_file_you_gave_me = files.upload()
+        if not the_file_you_gave_me:
+            print("\nOh dear, it seems no file was selected. That's okay, maybe next time!")
+            print("We can't proceed without your data, so I'll gracefully bow out for now.")
+            exit()
 
-    if not the_file_you_gave_me:
-        print("\nOh dear, it seems no file was selected. That's okay, maybe next time!")
-        print("We can't proceed without your data, so I'll gracefully bow out for now.")
+        the_name_of_the_file = next(iter(the_file_you_gave_me))
+        print(f"Fantastic! I've received your file: '{the_name_of_the_file}'. Let's process it!")
+
+        your_investment_details = pd.read_csv(the_name_of_the_file)
+        your_investment_details.columns = your_investment_details.columns.str.strip()
+        your_investment_details.rename(columns={
+            'Ticker': 'ticker',
+            'Shares': 'shares',
+            'Purchase_Date': 'purchase_date',
+            'Purchase_Price': 'purchase_price'
+        }, inplace=True)
+
+        your_investment_details['purchase_date'] = pd.to_datetime(your_investment_details['purchase_date'], errors='coerce')
+        your_investment_details['purchase_date'].fillna(pd.to_datetime('today'), inplace=True)
+        your_investment_details.set_index('ticker', inplace=True)
+
+        required_cols_for_csv = ['shares', 'purchase_date', 'purchase_price']
+        if not all(col in your_investment_details.columns for col in required_cols_for_csv):
+            print("Error: Missing CSV columns. Expecting 'shares', 'purchase_date', and 'purchase_price'.")
+            exit()
+
+        portfolio_data = your_investment_details
+        print("\nWonderful! Your investment details from the CSV are all loaded up!")
+    except ImportError:
+        print("\nError: 'google.colab' not found. This feature only works in Google Colab.")
+        print("Please run this script in Colab, or choose option 2 for manual input.")
         exit()
-
-    the_name_of_the_file = next(iter(the_file_you_gave_me))
-    print(f"Fantastic! I've received your file: '{the_name_of_the_file}'. Let's process it!")
-
-
-    your_investment_details = pd.read_csv(the_name_of_the_file)
-    your_investment_details.columns = your_investment_details.columns.str.strip()
-    your_investment_details.rename(columns={
-        'Ticker': 'ticker',
-        'Shares': 'shares',
-        'Purchase_Date': 'purchase_date',
-        'Purchase_Price': 'purchase_price'
-    }, inplace=True)
-
-
-    your_investment_details['purchase_date'] = pd.to_datetime(your_investment_details['purchase_date'])
-    your_investment_details.set_index('ticker', inplace=True)
-
-    required_cols_for_csv = ['shares', 'purchase_date', 'purchase_price']
-    if not all(col in your_investment_details.columns for col in required_cols_for_csv):
-        print("Error: Missing CSV columns.")
-        exit()
-
-
-    portfolio_data = your_investment_details
-    print("\nWonderful! Your investment details from the CSV are all loaded up!")
 
 
 elif your_choice_of_input == '2':
@@ -70,12 +82,16 @@ elif your_choice_of_input == '2':
     your_personal_investment_list = []
     while True:
         the_stock_symbol = input("First, tell me the Ticker Symbol (e.g., AAPL for Apple): ").strip().upper()
+        
+        try:
+            how_many_shares = float(input(f"Great! Now, how many shares of {the_stock_symbol} do you own?: "))
+            date_of_purchase_text = input(f"And when did you buy {the_stock_symbol}? (Please use YYYY-MM-DD format, like 2020-01-15): ").strip()
+            date_of_purchase = datetime.strptime(date_of_purchase_text, '%Y-%m-%d')
+            price_per_share_paid = float(input(f"And what was the price you paid per share for {the_stock_symbol}?: "))
+        except ValueError:
+            print("Invalid input. Please ensure shares and price are numbers, and date is YYYY-MM-DD.")
+            continue
 
-
-        how_many_shares = float(input(f"Great! Now, how many shares of {the_stock_symbol} do you own?: "))
-        date_of_purchase_text = input(f"And when did you buy {the_stock_symbol}? (Please use YYYY-MM-DD format, like 2020-01-15): ").strip()
-        date_of_purchase = datetime.strptime(date_of_purchase_text, '%Y-%m-%d')
-        price_per_share_paid = float(input(f"And what was the price you paid per share for {the_stock_symbol}?: "))
 
         your_personal_investment_list.append({
             'ticker': the_stock_symbol,
@@ -116,7 +132,18 @@ todays_date = datetime.now()
 
 print(f"I'm downloading all the daily worth info from {data_grab_start_date.strftime('%Y-%m-%d')} right up to this very moment, {todays_date.strftime('%Y-%m-%d')}.")
 
-all_historical_market_data = yf.download(all_my_tickers, start=data_grab_start_date, end=todays_date)['Adj Close']
+all_historical_market_data_raw = yf.download(all_my_tickers, start=data_grab_start_date, end=todays_date)
+if all_historical_market_data_raw.empty:
+    print("Could not download historical data. Exiting.")
+    exit()
+
+if len(all_my_tickers) > 1:
+    all_historical_market_data = all_historical_market_data_raw['Adj Close']
+else:
+    all_historical_market_data = all_historical_market_data_raw[['Adj Close']]
+    all_historical_market_data.columns = [all_my_tickers[0]]
+
+
 print("\nWonderful news! All the historical market data has been successfully downloaded.")
 print("Here's a little peek at the most recent data I fetched:")
 print(all_historical_market_data.tail())
@@ -154,7 +181,8 @@ for the_stock_ticker in portfolio_data.index:
         the_stock_info = yf.Ticker(the_stock_ticker)
         the_dividends_history = the_stock_info.dividends
         if not the_dividends_history.empty:
-            the_relevant_dividends = the_dividends_history[(the_dividends_history.index >= portfolio_data.loc[the_stock_ticker, 'purchase_date']) & (the_dividends_history.index <= todays_date)]
+            purchase_date_for_ticker = portfolio_data.loc[the_stock_ticker, 'purchase_date']
+            the_relevant_dividends = the_dividends_history[(the_dividends_history.index >= purchase_date_for_ticker) & (the_dividends_history.index <= todays_date)]
             total_dividends_per_share = the_relevant_dividends.sum()
             portfolio_data.loc[the_stock_ticker, 'allMyDividendsReceived'] = total_dividends_per_share * portfolio_data.loc[the_stock_ticker, 'shares']
             print(f"Dividends for {the_stock_ticker} are all tallied up!")
@@ -191,10 +219,16 @@ pd.reset_option('display.float_format')
 total_money_started_with = portfolio_data['totalAmountInvested'].sum()
 current_total_value_of_portfolio = portfolio_data['whatsItWorthNow'].sum()
 overall_money_change = current_total_value_of_portfolio - total_money_started_with
-overall_percent_change = (overall_money_change / total_money_started_with) * 100
+if total_money_started_with > 0:
+    overall_percent_change = (overall_money_change / total_money_started_with) * 100
+else:
+    overall_percent_change = 0
 
 overall_money_change_with_divs = portfolio_data['totalGainLossIncludingDivs'].sum()
-overall_percent_change_with_divs = (overall_money_change_with_divs / total_money_started_with) * 100
+if total_money_started_with > 0:
+    overall_percent_change_with_divs = (overall_money_change_with_divs / total_money_started_with) * 100
+else:
+    overall_percent_change_with_divs = 0
 
 
 how_many_years_portfolio_held = (todays_date - portfolio_data['purchase_date'].min()).days / 365.25
@@ -237,6 +271,7 @@ if not daily_value_of_portfolio.empty:
     print(f"Your Portfolio's Maximum Historical Drawdown: {the_biggest_drawdown:,.2f}%")
 else:
     print("Oh dear, can't calculate max drawdown, not enough history!")
+    the_biggest_drawdown = 0
 
 
 print("\n--- Stock Correlation Matrix ---")
@@ -258,8 +293,11 @@ else:
 
 
 print("\n--- Portfolio Volatility Calculation ---")
-daily_portfolio_changes = daily_value_of_portfolio['Portfolio Value'].pct_change().dropna()
-how_bumpy_the_ride_is = daily_portfolio_changes.std() * np.sqrt(252) * 100
+if not daily_value_of_portfolio.empty:
+    daily_portfolio_changes = daily_value_of_portfolio['Portfolio Value'].pct_change().dropna()
+    how_bumpy_the_ride_is = daily_portfolio_changes.std() * np.sqrt(252) * 100
+else:
+    how_bumpy_the_ride_is = 0
 
 
 print("\n--- Your Grand Overall Portfolio Summary ---")
@@ -282,42 +320,43 @@ print("---------------------------------------------")
 print("\n--- Let's draw some pictures of your money! ---")
 print("Generating charts to visualize your allocation and performance!")
 
-plt.figure(figsize=(10, 7))
-plt.pie(portfolio_data['whatsItWorthNow'],
-        labels=portfolio_data.index,
-        autopct='%1.1f%%',
-        startangle=90,
-        pctdistance=0.85,
-        wedgeprops=dict(width=0.4))
-plt.title('Where Your Money Is Right Now (Current Portfolio Allocation)', fontsize=16)
-plt.axis('equal')
-plt.show()
+if not portfolio_data.empty:
+    plt.figure(figsize=(10, 7))
+    plt.pie(portfolio_data['whatsItWorthNow'],
+            labels=portfolio_data.index,
+            autopct='%1.1f%%',
+            startangle=90,
+            pctdistance=0.85,
+            wedgeprops=dict(width=0.4))
+    plt.title('Where Your Money Is Right Now (Current Portfolio Allocation)', fontsize=16)
+    plt.axis('equal')
+    plt.show()
 
-plt.figure(figsize=(12, 6))
-what_stock_gained_or_lost_sorted = portfolio_data.sort_values('percentGainLossIncludingDivs', ascending=True)
-the_bar_colors = ['lightcoral' if x < 0 else 'lightgreen' for x in what_stock_gained_or_lost_sorted['percentGainLossIncludingDivs']]
-plt.bar(what_stock_gained_or_lost_sorted.index, what_stock_gained_or_lost_sorted['percentGainLossIncludingDivs'], color=the_bar_colors)
-plt.axhline(0, color='grey', linewidth=0.8)
-plt.xlabel('Your Amazing Ticker Symbol', fontsize=12)
-plt.ylabel('Percentage Gain/Loss (Including Dividends!) (%)', fontsize=12)
-plt.title('How Each of Your Stocks Performed (Percentage Gain/Loss, Including Dividends)', fontsize=16)
-plt.xticks(rotation=45, ha='right')
-plt.grid(axis='y', linestyle='--', alpha=0.7)
-plt.tight_layout()
-plt.show()
+    plt.figure(figsize=(12, 6))
+    what_stock_gained_or_lost_sorted = portfolio_data.sort_values('percentGainLossIncludingDivs', ascending=True)
+    the_bar_colors = ['lightcoral' if x < 0 else 'lightgreen' for x in what_stock_gained_or_lost_sorted['percentGainLossIncludingDivs']]
+    plt.bar(what_stock_gained_or_lost_sorted.index, what_stock_gained_or_lost_sorted['percentGainLossIncludingDivs'], color=the_bar_colors)
+    plt.axhline(0, color='grey', linewidth=0.8)
+    plt.xlabel('Your Amazing Ticker Symbol', fontsize=12)
+    plt.ylabel('Percentage Gain/Loss (Including Dividends!) (%)', fontsize=12)
+    plt.title('How Each of Your Stocks Performed (Percentage Gain/Loss, Including Dividends)', fontsize=16)
+    plt.xticks(rotation=45, ha='right')
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.tight_layout()
+    plt.show()
 
 print("\nLet's see the historical journey of your portfolio's worth!")
 
-
-plt.figure(figsize=(14, 7))
-plt.plot(daily_value_of_portfolio.index, daily_value_of_portfolio['Portfolio Value'], label='Your Portfolio Value', color='blue', linewidth=2)
-plt.xlabel('Date, My Friend', fontsize=12)
-plt.ylabel('Value (In Dollars!) ($)', fontsize=12)
-plt.title('The Historical Rollercoaster of Your Portfolio Value', fontsize=16)
-plt.grid(True, linestyle='--', alpha=0.6)
-plt.legend()
-plt.tight_layout()
-plt.show()
+if not daily_value_of_portfolio.empty:
+    plt.figure(figsize=(14, 7))
+    plt.plot(daily_value_of_portfolio.index, daily_value_of_portfolio['Portfolio Value'], label='Your Portfolio Value', color='blue', linewidth=2)
+    plt.xlabel('Date, My Friend', fontsize=12)
+    plt.ylabel('Value (In Dollars!) ($)', fontsize=12)
+    plt.title('The Historical Rollercoaster of Your Portfolio Value', fontsize=16)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
 
 print("\n--- Time for a grand comparison! ---")
@@ -367,5 +406,5 @@ if not benchmark_past_data.empty and not daily_value_of_portfolio.empty:
 else:
     print("Sorry, my friend, I can't generate the benchmark comparison chart. Data was missing or incomplete.")
 
-print("\nAnalysis complete. Thank you for using your friendly financial assistant!")
+print("\nAnalysis complete. Thank you for using your friendly financial assistant!") 
 print("I hope this helped you understand your investments better. Until next time!")
